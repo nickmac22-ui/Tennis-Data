@@ -1,0 +1,38 @@
+# Mirrors the TennisMyLife ATP match database into this repo once a day (and on demand),
+# so the model can pull fresh data from raw.githubusercontent.com.
+name: sync-tennis-data
+on:
+  schedule:
+    - cron: "15 6 * * *"        # 06:15 UTC daily; add a second line for an evening refresh if you like
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download current + recent seasons
+        run: |
+          set -e
+          mkdir -p data
+          Y=$(date -u +%Y)
+          for y in $(seq $((Y-1)) $Y); do
+            curl -fsSL "https://stats.tennismylife.org/data/$y.csv"                      -o "data/atp_matches_$y.csv"
+            curl -fsSL "https://stats.tennismylife.org/data/${y}_challenger.csv"          -o "data/lower_chall_$y.csv"  || true
+            curl -fsSL "https://stats.tennismylife.org/data/atp_quali/${y}_atp_quali.csv" -o "data/lower_qual_$y.csv"   || true
+          done
+          # first run only: back-fill history (skipped once the files exist)
+          for y in $(seq 2000 $((Y-2))); do
+            [ -f "data/atp_matches_$y.csv" ] || curl -fsSL "https://stats.tennismylife.org/data/$y.csv" -o "data/atp_matches_$y.csv" || true
+            [ -f "data/lower_chall_$y.csv" ] || curl -fsSL "https://stats.tennismylife.org/data/${y}_challenger.csv" -o "data/lower_chall_$y.csv" || true
+            [ -f "data/lower_qual_$y.csv" ]  || curl -fsSL "https://stats.tennismylife.org/data/atp_quali/${y}_atp_quali.csv" -o "data/lower_qual_$y.csv" || true
+          done
+          echo "updated $(date -u +'%Y-%m-%d %H:%M UTC')" > data/LAST_SYNC.txt
+      - name: Commit if changed
+        run: |
+          git config user.name  "tennis-data-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add data
+          git diff --cached --quiet || git commit -m "data sync $(date -u +%F)"
+          git push
